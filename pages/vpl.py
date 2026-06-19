@@ -8,6 +8,10 @@ import streamlit as st
 from engine.runner import run_parametric
 from ui.results_table import render_results
 from ui.sidebar import render_sidebar
+from ui.theme import apply_brand_theme
+
+
+apply_brand_theme()
 
 
 def _range_values(start, stop, step, decimals=1):

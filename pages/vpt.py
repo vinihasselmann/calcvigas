@@ -15,6 +15,10 @@ from engine.vpt import (
 )
 from engine.vpt_model import LP_CAP, VPT_SECTION_CATALOG
 from ui.export import export_excel, export_excel_to_path
+from ui.theme import apply_brand_theme
+
+
+apply_brand_theme()
 
 
 DISPLAY_MAX_ROWS = 5000

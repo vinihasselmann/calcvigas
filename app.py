@@ -1,6 +1,8 @@
 """Aplicativo Streamlit para calculo de quadro estrutural importado."""
 
+import base64
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -12,9 +14,11 @@ from engine.structural_frame import (
 )
 from ui.export import export_excel
 from ui.memorial_pdf import export_memorial_pdf
+from ui.theme import apply_brand_theme
 
 
 DISPLAY_MAX_ROWS = 5000
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "cassol_precalc_logo.png"
 VISIBLE_FIRST_COLUMNS = [
     "linha_origem",
     "id_elemento",
@@ -81,11 +85,18 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+apply_brand_theme()
+
 
 def _template_bytes() -> bytes:
     output = BytesIO()
     sample_frame_table().to_excel(output, index=False)
     return output.getvalue()
+
+
+def _image_data_uri(path: Path) -> str:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def _column_config(df: pd.DataFrame) -> dict:
@@ -189,16 +200,22 @@ def _render_results(df: pd.DataFrame):
         )
 
 
-st.title("TESTESVIGAS - Quadro Estrutural")
-st.caption("Importe uma tabela unica com VPL, VPT, VR e lajes alveolares. Cada linha e calculada individualmente.")
-
-top_cols = st.columns([1, 1])
-with top_cols[0]:
+hero_cols = st.columns([0.95, 1.15], gap="large")
+with hero_cols[0]:
+    st.markdown(
+        f'<img class="cassol-home-logo" src="{_image_data_uri(LOGO_PATH)}" alt="Cassol PreCalc">',
+        unsafe_allow_html=True,
+    )
+with hero_cols[1]:
+    st.markdown(
+        '<p class="cassol-home-copy">Importe uma tabela unica com VPL, VPT, VR e lajes alveolares. '
+        "Cada linha e calculada individualmente.</p>",
+        unsafe_allow_html=True,
+    )
     uploaded = st.file_uploader(
         "Tabela do Revit (.xlsx, .xlsm, .xls, .csv ou .txt)",
         type=["xlsx", "xlsm", "xls", "csv", "txt"],
     )
-with top_cols[1]:
     st.download_button(
         "Baixar modelo de tabela",
         data=_template_bytes(),

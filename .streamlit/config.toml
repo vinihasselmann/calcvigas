@@ -6,3 +6,10 @@ folderWatchBlacklist = [
   ".pytest_cache",
   "__pycache__",
 ]
+
+[theme]
+primaryColor = "#EFA828"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FBFAF7"
+textColor = "#34383b"
+font = "sans serif"

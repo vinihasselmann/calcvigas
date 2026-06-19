@@ -17,6 +17,10 @@ from engine.lajes_alv import (
 )
 from engine.lajes_alv_model import LAJE_ALV_SPECS
 from ui.export import export_excel, export_excel_to_path
+from ui.theme import apply_brand_theme
+
+
+apply_brand_theme()
 
 
 DISPLAY_MAX_ROWS = 5000
