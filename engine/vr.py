@@ -345,9 +345,8 @@ def _section_label(params: dict) -> str:
 def _iter_section_candidates(base_params: dict):
     current = _resolve_section(base_params)
     yielded = set()
-    for h, bw in [(current.h, current.bw), *SECTION_CATALOG]:
-        if h < current.h or bw < current.bw:
-            continue
+    candidates = sorted({(current.h, current.bw), *SECTION_CATALOG}, key=lambda item: (item[0] * item[1], item[0], item[1]))
+    for h, bw in candidates:
         key = (h, bw)
         if key in yielded:
             continue
@@ -400,7 +399,13 @@ def _with_recommendation(result: dict, original: str) -> dict:
     selected = output.get("secao") or ""
     output["secao_original"] = original
     output["secao_sugerida"] = selected if selected and selected != original else ""
-    output["mensagem"] = f"aumentar seção para {selected}" if selected and selected != original else ""
+    if selected and selected != original:
+        original_dims = _parse_section_label(original)
+        selected_dims = _parse_section_label(selected)
+        smaller = original_dims and selected_dims and selected_dims[0] * selected_dims[1] < original_dims[0] * original_dims[1]
+        output["mensagem"] = f"{'reduzir' if smaller else 'aumentar'} seção para {selected}"
+    else:
+        output["mensagem"] = ""
     return output
 
 

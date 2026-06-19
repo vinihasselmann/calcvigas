@@ -1,6 +1,7 @@
 """Aplicativo Streamlit para calculo de quadro estrutural importado."""
 
 import base64
+import hashlib
 from io import BytesIO
 from pathlib import Path
 
@@ -8,9 +9,11 @@ import pandas as pd
 import streamlit as st
 
 from engine.structural_frame import (
+    normalize_floor_table,
     read_frame_table,
     run_frame_cases,
-    sample_frame_table,
+    sample_beam_table,
+    sample_floor_table,
 )
 from ui.export import export_excel
 from ui.memorial_pdf import export_memorial_pdf
@@ -88,15 +91,20 @@ st.set_page_config(
 apply_brand_theme()
 
 
-def _template_bytes() -> bytes:
+def _template_bytes(df: pd.DataFrame) -> bytes:
     output = BytesIO()
-    sample_frame_table().to_excel(output, index=False)
+    df.to_excel(output, index=False)
     return output.getvalue()
 
 
 def _image_data_uri(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _upload_fingerprint(uploaded) -> tuple[str, int, str]:
+    content = uploaded.getvalue()
+    return uploaded.name, len(content), hashlib.sha256(content).hexdigest()
 
 
 def _column_config(df: pd.DataFrame) -> dict:
@@ -208,38 +216,78 @@ with hero_cols[0]:
     )
 with hero_cols[1]:
     st.markdown(
-        '<p class="cassol-home-copy">Importe uma tabela unica com VPL, VPT, VR e lajes alveolares. '
-        "Cada linha e calculada individualmente.</p>",
+        '<p class="cassol-home-copy">Importe a tabela de vigas e, separadamente, a tabela de pisos '
+        "estruturais. Cada elemento e calculado individualmente.</p>",
         unsafe_allow_html=True,
     )
-    uploaded = st.file_uploader(
-        "Tabela do Revit (.xlsx, .xlsm, .xls, .csv ou .txt)",
+    beams_uploaded = st.file_uploader(
+        "Tabela de vigas do Revit (.xlsx, .xlsm, .xls, .csv ou .txt)",
         type=["xlsx", "xlsm", "xls", "csv", "txt"],
+        key="beams_table_upload",
     )
     st.download_button(
-        "Baixar modelo de tabela",
-        data=_template_bytes(),
-        file_name="modelo_quadro_estrutural.xlsx",
+        "Baixar modelo de vigas",
+        data=_template_bytes(sample_beam_table()),
+        file_name="modelo_vigas.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    floors_uploaded = st.file_uploader(
+        "Tabela de pisos do Revit (.xlsx, .xlsm, .xls, .csv ou .txt)",
+        type=["xlsx", "xlsm", "xls", "csv", "txt"],
+        key="floors_table_upload",
+    )
+    st.download_button(
+        "Baixar modelo de pisos",
+        data=_template_bytes(sample_floor_table()),
+        file_name="modelo_pisos.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
 
 st.info(
-    "Use uma coluna `tipo_elemento` com VPL, VPT, VR ou LAJE. "
-    "Campos ausentes de materiais, revestimento e armaduras usam os padroes atuais do app."
+    "A tabela de vigas deve conter VPL, VPT e VR, sem linhas de lajes. A tabela de pisos deve conter "
+    "`Marca de tipo`, `Modelo`, `LAJE-Sobrecarga`, `LAJE-Vão` e `LAJE_Psi`. Nas vigas, use "
+    "`LAJE_Marca_E` e `LAJE_Marca_D`."
 )
 
-if uploaded is None:
-    st.dataframe(sample_frame_table(), use_container_width=True, hide_index=True)
+upload_signature = (
+    (_upload_fingerprint(beams_uploaded), _upload_fingerprint(floors_uploaded))
+    if beams_uploaded is not None and floors_uploaded is not None
+    else None
+)
+if st.session_state.get("frame_upload_signature") != upload_signature:
+    st.session_state.pop("df_frame_results", None)
+    st.session_state["frame_upload_signature"] = upload_signature
+
+if beams_uploaded is None and floors_uploaded is None:
+    preview_cols = st.columns(2)
+    with preview_cols[0]:
+        st.caption("Exemplo — vigas")
+        st.dataframe(sample_beam_table(), use_container_width=True, hide_index=True)
+    with preview_cols[1]:
+        st.caption("Exemplo — pisos")
+        st.dataframe(sample_floor_table(), use_container_width=True, hide_index=True)
+elif beams_uploaded is None or floors_uploaded is None:
+    missing = "tabela de vigas" if beams_uploaded is None else "tabela de pisos"
+    st.warning(f"Envie tambem a {missing} para liberar o calculo.")
 else:
     try:
-        input_df = read_frame_table(uploaded, uploaded.name)
+        beams_df = read_frame_table(beams_uploaded, beams_uploaded.name)
+        floors_df = read_frame_table(floors_uploaded, floors_uploaded.name)
+        normalize_floor_table(floors_df)
     except Exception as exc:
-        st.error(f"Nao foi possivel ler a tabela. Detalhe: {exc}")
+        st.error(f"Nao foi possivel ler uma das tabelas. Detalhe: {exc}")
         st.stop()
 
-    st.subheader("Previa da tabela importada")
-    st.dataframe(input_df.head(200), use_container_width=True, hide_index=True)
+    st.subheader("Previa das tabelas importadas")
+    preview_cols = st.columns(2)
+    with preview_cols[0]:
+        st.caption(f"Vigas — {len(beams_df):,} linhas")
+        st.dataframe(beams_df.head(200), use_container_width=True, hide_index=True)
+    with preview_cols[1]:
+        st.caption(f"Pisos — {len(floors_df):,} linhas")
+        st.dataframe(floors_df.head(200), use_container_width=True, hide_index=True)
 
     if st.button("Calcular quadro estrutural", type="primary", use_container_width=True):
         progress_bar = st.progress(0)
@@ -249,8 +297,17 @@ else:
             progress_bar.progress(done / total if total else 1)
             progress_text.caption(f"Calculados {done:,} de {total:,} elementos")
 
-        with st.spinner("Calculando elementos..."):
-            st.session_state["df_frame_results"] = run_frame_cases(input_df, progress_callback=update_progress)
+        try:
+            with st.spinner("Calculando elementos..."):
+                st.session_state["df_frame_results"] = run_frame_cases(
+                    beams_df,
+                    progress_callback=update_progress,
+                    floor_df=floors_df,
+                )
+        except Exception as exc:
+            st.session_state.pop("df_frame_results", None)
+            st.error(f"Nao foi possivel calcular a tabela. Detalhe: {exc}")
+            st.stop()
         progress_bar.progress(1.0)
         progress_text.caption("Calculo concluido")
 

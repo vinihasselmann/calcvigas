@@ -80,6 +80,8 @@ ALIAS_MAP = {
     "taxa_ca": {"taxa ca", "taxa-ca", "taxa_ca"},
     "taxa_cp": {"taxa cp", "taxa-cp", "taxa_cp"},
     "laje_marca": {"laje marca", "laje_marca", "marca laje", "lajes marcas"},
+    "laje_marca_esq": {"laje marca e", "laje_marca_e", "laje marca esq", "laje_marca_esq", "laje esquerda marca"},
+    "laje_marca_dir": {"laje marca d", "laje_marca_d", "laje marca dir", "laje_marca_dir", "laje direita marca"},
     "laje_psi": {"laje psi", "laje_psi", "psi laje", "psi_laje"},
     "acd_esq": {"sobrecarga_esq", "sobrecarga_esq_kgf_m2", "acd_esq", "acd esquerda"},
     "acd_dir": {"sobrecarga_dir", "sobrecarga_dir_kgf_m2", "acd_dir", "acd direita"},
@@ -175,9 +177,95 @@ def normalize_frame_table(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=renamed).dropna(how="all").copy()
 
 
-def run_frame_cases(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
-    normalized = normalize_frame_table(df)
-    laje_lookup = _build_laje_lookup(normalized)
+def normalize_floor_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza a tabela de pisos estruturais exportada pelo Revit."""
+    renamed = {}
+    used = set()
+    for column in df.columns:
+        normalized = _normalize_text(column)
+        canonical = FLOOR_CANONICAL_BY_ALIAS.get(normalized)
+        if canonical is None:
+            canonical = CANONICAL_BY_ALIAS.get(normalized, normalized.replace(" ", "_"))
+        if canonical in used:
+            canonical = f"{canonical}_{len(used)}"
+        renamed[column] = canonical
+        used.add(canonical)
+
+    normalized_df = df.rename(columns=renamed).dropna(how="all").copy()
+    required = {"id_elemento", "lp_type", "acd", "vao", "laje_psi"}
+    missing = sorted(required - set(normalized_df.columns))
+    if missing:
+        raise ValueError(
+            "Tabela de pisos sem as colunas obrigatorias: " + ", ".join(missing)
+        )
+    if normalized_df.empty:
+        raise ValueError("A tabela de pisos nao possui linhas para calcular.")
+
+    for column in sorted(required):
+        blank_rows = [idx + 1 for idx, value in enumerate(normalized_df[column]) if _is_blank(value)]
+        if blank_rows:
+            rows = ", ".join(str(row) for row in blank_rows[:10])
+            raise ValueError(f"Tabela de pisos com valor vazio em '{column}' nas linhas: {rows}.")
+
+    marks = normalized_df["id_elemento"].astype(str).str.strip().str.upper()
+    duplicated = sorted(set(marks[marks.duplicated(keep=False)]))
+    if duplicated:
+        raise ValueError("Marca de tipo duplicada na tabela de pisos: " + ", ".join(duplicated))
+
+    from .lajes_alv_model import LAJE_ALV_SPECS
+
+    invalid_models = sorted(
+        {
+            str(value)
+            for value in normalized_df["lp_type"]
+            if _normalize_lp(value) not in LAJE_ALV_SPECS
+        }
+    )
+    if invalid_models:
+        raise ValueError("Modelo alveolar invalido na tabela de pisos: " + ", ".join(invalid_models))
+
+    invalid_psi = sorted(
+        {
+            str(value)
+            for value in normalized_df["laje_psi"]
+            if _normalize_psi_code(value) not in PSI_BY_LAJE_CODE
+        }
+    )
+    if invalid_psi:
+        raise ValueError("LAJE_Psi invalido na tabela de pisos: " + ", ".join(invalid_psi))
+
+    invalid_load_rows = []
+    for idx, value in enumerate(normalized_df["acd"], start=1):
+        total = _coerce_value(value)
+        if total is None or float(total) < 200:
+            invalid_load_rows.append(idx)
+    if invalid_load_rows:
+        rows = ", ".join(str(row) for row in invalid_load_rows[:10])
+        raise ValueError(f"LAJE-Sobrecarga deve ser pelo menos 200 kgf/m2 nas linhas: {rows}.")
+
+    normalized_df["tipo_elemento"] = ELEMENT_LAJE
+    normalized_df["nome_tipo"] = normalized_df["lp_type"]
+    return normalized_df
+
+
+def run_frame_cases(
+    df: pd.DataFrame,
+    progress_callback=None,
+    floor_df: pd.DataFrame | None = None,
+    split_combined_total_load: bool = False,
+) -> pd.DataFrame:
+    frame_normalized = normalize_frame_table(df)
+    if floor_df is None:
+        normalized = frame_normalized
+        laje_lookup = _build_laje_lookup(normalized, split_total_load=split_combined_total_load)
+        floor_count = len(laje_lookup)
+    else:
+        frame_normalized = _drop_laje_rows(frame_normalized)
+        floor_normalized = normalize_floor_table(floor_df)
+        normalized = pd.concat([frame_normalized, floor_normalized], ignore_index=True, sort=False)
+        laje_lookup = _build_laje_lookup(floor_normalized, split_total_load=True)
+        floor_count = len(floor_normalized)
+
     results = []
     total = len(normalized)
     for idx, (_, row) in enumerate(normalized.iterrows(), start=1):
@@ -186,6 +274,8 @@ def run_frame_cases(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
             element_type = _detect_element_type(row_data)
             row_data = _resolve_laje_reference(row_data, element_type, laje_lookup)
             result = _run_typed_case(element_type, row_data)
+            if element_type == ELEMENT_LAJE and row_data.get("laje_psi") is not None:
+                result["laje_psi"] = _normalize_psi_code(row_data["laje_psi"])
         except Exception as exc:
             element_type = str(row_data.get("tipo_elemento", "") or "DESCONHECIDO")
             result = {"status": "ERRO", "erro_msg": str(exc)}
@@ -194,18 +284,48 @@ def run_frame_cases(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
             progress_callback(idx, total)
     output = pd.DataFrame(results)
     output.attrs["fixed_params"] = {"modo": "quadro estrutural importado"}
-    output.attrs["ranges"] = {"linhas_importadas": total}
+    output.attrs["ranges"] = {
+        "linhas_importadas": total,
+        "linhas_vigas": len(frame_normalized),
+        "linhas_lajes": floor_count,
+    }
     return output
+
+
+def _drop_laje_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Mantem a tabela de pisos como fonte exclusiva das lajes no fluxo separado."""
+    keep = []
+    for _, row in df.iterrows():
+        data = _clean_row(row.to_dict())
+        try:
+            keep.append(_detect_element_type(data) != ELEMENT_LAJE)
+        except ValueError:
+            keep.append(True)
+    return df.loc[keep].reset_index(drop=True)
 
 
 def sample_frame_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"ID_ELEMENTO": "LA01", "NOME_TIPO": "LP20", "PECA-Altura Pre": 20, "PECA-Largura Pre": 125, "VAO_VIGA_CM": 600, "LAJE-Sobrecarga": 800, "LAJE_Marca": ""},
-            {"ID_ELEMENTO": "LA02", "NOME_TIPO": "LP20", "PECA-Altura Pre": 20, "PECA-Largura Pre": 125, "VAO_VIGA_CM": 887.5, "LAJE-Sobrecarga": 500, "LAJE_Marca": ""},
-            {"ID_ELEMENTO": "V01", "NOME_TIPO": "L", "PECA-Altura Pre": 65, "PECA-Largura Pre": 40, "VAO_VIGA_CM": 652.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca": "LA01"},
-            {"ID_ELEMENTO": "V02", "NOME_TIPO": "L", "PECA-Altura Pre": 65, "PECA-Largura Pre": 40, "VAO_VIGA_CM": 652.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca": "LA02"},
-            {"ID_ELEMENTO": "V03", "NOME_TIPO": "T", "PECA-Altura Pre": 50, "PECA-Largura Pre": 25, "VAO_VIGA_CM": 792.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca": "LA01"},
+            {"ID_ELEMENTO": "LA01", "NOME_TIPO": "LP20", "PECA-Altura Pre": 20, "PECA-Largura Pre": 125, "VAO_VIGA_CM": 600, "LAJE-Sobrecarga": 800, "LAJE_Psi": 0},
+            {"ID_ELEMENTO": "LA02", "NOME_TIPO": "LP20", "PECA-Altura Pre": 20, "PECA-Largura Pre": 125, "VAO_VIGA_CM": 887.5, "LAJE-Sobrecarga": 500, "LAJE_Psi": 1},
+            {"ID_ELEMENTO": "V01", "NOME_TIPO": "L", "PECA-Altura Pre": 65, "PECA-Largura Pre": 40, "VAO_VIGA_CM": 652.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca_E": "LA01", "LAJE_Marca_D": ""},
+            {"ID_ELEMENTO": "V02", "NOME_TIPO": "L", "PECA-Altura Pre": 65, "PECA-Largura Pre": 40, "VAO_VIGA_CM": 652.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca_E": "LA02", "LAJE_Marca_D": ""},
+            {"ID_ELEMENTO": "V03", "NOME_TIPO": "T", "PECA-Altura Pre": 50, "PECA-Largura Pre": 25, "VAO_VIGA_CM": 792.46, "TAXA-CA": "0 kg/m3", "TAXA-CP": "0 kg/m3", "LAJE_Marca_E": "LA01", "LAJE_Marca_D": "LA02"},
+        ]
+    )
+
+
+def sample_beam_table() -> pd.DataFrame:
+    sample = sample_frame_table()
+    return sample[~sample["NOME_TIPO"].astype(str).str.startswith("LP")].reset_index(drop=True)
+
+
+def sample_floor_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Marca de tipo": "LA01", "Modelo": "LP20", "LAJE-Sobrecarga": 800, "LAJE-Vão": 600, "LAJE_Psi": 0},
+            {"Marca de tipo": "LA02", "Modelo": "LP20", "LAJE-Sobrecarga": 500, "LAJE-Vão": 900, "LAJE_Psi": 0},
         ]
     )
 
@@ -256,6 +376,8 @@ def _find_header_line(lines: list[str], sep: str) -> int:
         cells = [_normalize_text(cell) for cell in line.split(sep)]
         if "id elemento" in cells or "id_elemento" in cells:
             return idx
+        if {"marca de tipo", "modelo", "laje sobrecarga", "laje vao"}.issubset(cells):
+            return idx
     return 0
 
 
@@ -297,6 +419,14 @@ def _normalize_text(value) -> str:
 
 
 CANONICAL_BY_ALIAS = {_normalize_text(alias): canonical for canonical, aliases in ALIAS_MAP.items() for alias in aliases | {canonical}}
+
+FLOOR_CANONICAL_BY_ALIAS = {
+    "marca de tipo": "id_elemento",
+    "modelo": "lp_type",
+    "laje sobrecarga": "acd",
+    "laje vao": "vao",
+    "laje psi": "laje_psi",
+}
 
 
 def _clean_row(row: dict) -> dict:
@@ -394,38 +524,34 @@ def _optimize_vpl_case(base_params: dict) -> dict:
         if best_section is not None:
             return _with_section_recommendation(best_section, original, section_label)
     if best_structural is not None:
-        marked = _mark_vpl_sigma_rule_as_accepted(best_structural)
-        return _with_section_recommendation(marked, original, marked.get("secao_testada", original))
+        return _with_no_solution_message(best_structural, original, require_vpl_sigma=True)
     return _with_no_solution_message(fallback, original, require_vpl_sigma=True)
 
 
 def _iter_vpl_section_candidates(base_params: dict):
-    seen = set()
+    candidates = {}
     current = base_params.copy()
-    current_label = _vpl_section_label(current)
     if current.get("h") and current.get("bw"):
-        seen.add((float(current["h"]), float(current["bw"])))
-        yield current, current_label
+        key = (float(current["h"]), float(current["bw"]))
+        candidates[key] = (current, _vpl_section_label(current))
     lp_type = base_params.get("lp_type")
     if not lp_type:
+        for _, item in sorted(candidates.items(), key=lambda entry: (entry[0][0] * entry[0][1], entry[0])):
+            yield item
         return
     from data.lp_table import LP_TABLE
 
     hsup = LP_TABLE[lp_type]["cap"] + base_params.get("capa", 5)
-    current_h = float(base_params.get("h") or 0)
     bw = float(base_params.get("bw", VPL_DEFAULTS["bw"]))
     for h, hinf in sorted(VPL_SECTION_CATALOG):
         if h != hsup + hinf:
             continue
-        if current_h and h < current_h:
-            continue
         key = (float(h), bw)
-        if key in seen:
-            continue
-        seen.add(key)
         params = base_params.copy()
         params.update({"h": float(h), "hinf": float(hinf), "hsup": float(hsup), "bw": bw, "bf": base_params.get("bf", 20)})
-        yield params, f"L{int(h)}/{int(hinf)}x{int(bw)}"
+        candidates[key] = (params, f"L{int(h)}/{int(hinf)}x{int(bw)}")
+    for _, item in sorted(candidates.items(), key=lambda entry: (entry[0][0] * entry[0][1], entry[0])):
+        yield item
 
 
 def _vpl_section_label(params: dict) -> str:
@@ -478,7 +604,8 @@ def _valid_vpl_layout(layout: dict) -> bool:
     for idx in (1, 2, 3):
         if _layout_count(layout, f"n_cord_c{idx}") == 1:
             return False
-        if _layout_count(layout, f"n_barras_c{idx}") == 1:
+        n_barras = _layout_count(layout, f"n_barras_c{idx}")
+        if n_barras == 1 or n_barras % 2 != 0:
             return False
     if n_c2 > 0 and n_c1 == 0:
         return False
@@ -565,7 +692,6 @@ def _limits_for_bw(bw: float) -> dict:
 
 
 def _is_approved_vpl_solution(result: dict) -> bool:
-    bottom_cords = _bottom_cord_count(result)
     return (
         result.get("status") == "PASSA"
         and result.get("ok_flexao") is True
@@ -575,7 +701,7 @@ def _is_approved_vpl_solution(result: dict) -> bool:
         and _coerce_value(result.get("taxa_armadura_protendida", MAX_TAXA_CP + 1)) <= MAX_TAXA_CP
         and _has_minimum_vpl_passive_only_reinforcement(result)
         and (_coerce_value(result.get("MRU_MSD", 0)) or 0) >= MIN_MRU_MSD_RATIO
-        and (bottom_cords == 0 or _vpl_sigma_inf_f_within_tolerance(result))
+        and _vpl_sigma_inf_f_within_tolerance(result)
     )
 
 
@@ -706,11 +832,7 @@ def _vpt_params(row: dict) -> dict:
 def _optimize_vpt_case(base_params: dict) -> dict:
     original = str(base_params.get("secao") or "")
     fallback = None
-    first_approved = None
-    best_economy = None
     for params, section_label in _iter_vpt_section_candidates(base_params):
-        if first_approved is not None and not _should_evaluate_vpt_economy_section(first_approved, section_label):
-            continue
         best_section = None
         bw = VPT_SECTION_CATALOG[section_label].bw if section_label in VPT_SECTION_CATALOG else params.get("bw", 40)
         for layout in _iter_vpt_layouts(bw):
@@ -724,13 +846,7 @@ def _optimize_vpt_case(base_params: dict) -> dict:
                 if best_section is None or _vpt_score(copied) < _vpt_score(best_section):
                     best_section = copied
         if best_section is not None:
-            if first_approved is None:
-                first_approved = best_section
-                best_economy = best_section
-            elif _prefer_vpt_economy_candidate(first_approved, best_economy, best_section):
-                best_economy = best_section
-    if best_economy is not None:
-        return _with_section_recommendation(best_economy, original, str(best_economy.get("secao_testada") or best_economy.get("secao") or ""))
+            return _with_section_recommendation(best_section, original, section_label)
     return _with_no_solution_message(fallback, original)
 
 
@@ -740,12 +856,7 @@ def _iter_vpt_section_candidates(base_params: dict):
     if original_spec is None:
         yield base_params.copy(), original
         return
-    candidates = [
-        spec
-        for spec in VPT_SECTION_CATALOG.values()
-        if spec.hp >= original_spec.hp
-        and spec.bw >= original_spec.bw
-    ]
+    candidates = list(VPT_SECTION_CATALOG.values())
     candidates.sort(key=lambda spec: (spec.hp * spec.bw, spec.hp, spec.bw, spec.secao))
     for spec in candidates:
         params = base_params.copy()
@@ -963,7 +1074,7 @@ def _coerce_value(value):
     return value.item() if hasattr(value, "item") else value
 
 
-def _build_laje_lookup(df: pd.DataFrame) -> dict[str, dict]:
+def _build_laje_lookup(df: pd.DataFrame, split_total_load: bool = False) -> dict[str, dict]:
     lookup = {}
     for _, row in df.iterrows():
         data = _clean_row(row.to_dict())
@@ -975,18 +1086,27 @@ def _build_laje_lookup(df: pd.DataFrame) -> dict[str, dict]:
         element_id = data.get("id_elemento")
         if not element_id:
             continue
+        exported_load = _coerce_value(data.get("acd"))
+        if split_total_load and (exported_load is None or float(exported_load) < 200):
+            raise ValueError(
+                "LAJE-Sobrecarga da laje '{}' deve ser pelo menos 200 kgf/m2.".format(element_id)
+            )
+        acd = float(exported_load) - 200 if split_total_load and exported_load is not None else exported_load
         lookup[str(element_id).strip().upper()] = {
             "lp_type": _normalize_lp(data.get("lp_type") or data.get("nome_tipo")),
             "vao": _length_to_m(data.get("vao_viga") or data.get("vao")),
-            "acd": _coerce_value(data.get("acd")),
+            "acd": acd,
+            "rev": 200 if split_total_load else _coerce_value(data.get("rev")),
+            "sobrecarga_total": exported_load,
+            "laje_psi": _normalize_psi_code(data.get("laje_psi")) if data.get("laje_psi") is not None else None,
         }
     return lookup
 
 
 def _resolve_laje_reference(row: dict, element_type: str, lookup: dict[str, dict]) -> dict:
-    if element_type in {ELEMENT_LAJE, ELEMENT_VR} or not row.get("laje_marca"):
+    if element_type in {ELEMENT_LAJE, ELEMENT_VR}:
         return row
-    marks = _split_marks(row["laje_marca"])
+    marks = _laje_marks_for_beam(row, element_type)
     if not marks:
         return row
     lajes = []
@@ -1000,15 +1120,37 @@ def _resolve_laje_reference(row: dict, element_type: str, lookup: dict[str, dict
     result.setdefault("lp_type", first["lp_type"])
     result.setdefault("vao_laje", first["vao"])
     result.setdefault("acd", first["acd"])
+    if first.get("rev") is not None:
+        result.setdefault("rev", first["rev"])
     if element_type == ELEMENT_VPT:
         second = lajes[1] if len(lajes) > 1 else first
         result.setdefault("lp_esq", first["lp_type"])
         result.setdefault("vao_laje_esq", first["vao"])
         result.setdefault("acd_esq", first["acd"])
+        if first.get("rev") is not None:
+            result.setdefault("rev_esq", first["rev"])
         result.setdefault("lp_dir", second["lp_type"])
         result.setdefault("vao_laje_dir", second["vao"])
         result.setdefault("acd_dir", second["acd"])
+        if second.get("rev") is not None:
+            result.setdefault("rev_dir", second["rev"])
+    psi_codes = [laje.get("laje_psi") for laje in lajes if laje.get("laje_psi") is not None]
+    if psi_codes:
+        result.setdefault("laje_psi", max(psi_codes, key=lambda code: PSI_BY_LAJE_CODE[code]["psi2"]))
     return result
+
+
+def _laje_marks_for_beam(row: dict, element_type: str) -> list[str]:
+    left = row.get("laje_marca_esq")
+    right = row.get("laje_marca_dir")
+    if left or right:
+        first = left or right
+        if element_type == ELEMENT_VPT:
+            return [str(first), str(right or first)]
+        return [str(first)]
+    if row.get("laje_marca"):
+        return _split_marks(row["laje_marca"])
+    return []
 
 
 def _split_marks(value) -> list[str]:
@@ -1074,13 +1216,20 @@ def _require(params: dict, *keys: str):
 def _apply_laje_psi(params: dict, row: dict):
     if "laje_psi" not in row:
         return
-    code = str(row["laje_psi"]).strip().upper()
+    code = _normalize_psi_code(row["laje_psi"])
     if not code:
         return
     if code not in PSI_BY_LAJE_CODE:
         raise ValueError("LAJE_psi invalido. Use 0, 1 ou 2.")
     params["laje_psi"] = code
     params.update(PSI_BY_LAJE_CODE[code])
+
+
+def _normalize_psi_code(value) -> str:
+    coerced = _coerce_value(value)
+    if isinstance(coerced, (int, float)) and float(coerced).is_integer():
+        return str(int(coerced))
+    return str(coerced).strip().upper()
 
 
 def _copy_psi_fields(result: dict, params: dict) -> dict:
@@ -1107,8 +1256,19 @@ def _with_section_recommendation(result: dict, original: str, selected: str) -> 
     output = result.copy()
     output["secao_original"] = original
     output["secao_sugerida"] = selected if selected and selected != original else ""
-    output["mensagem"] = f"aumentar seção para {selected}" if selected and selected != original else ""
+    output["mensagem"] = _section_change_message(original, selected)
     return output
+
+
+def _section_change_message(original: str, selected: str) -> str:
+    if not selected or selected == original:
+        return ""
+    original_numbers = [float(value.replace(",", ".")) for value in re.findall(r"\d+(?:[.,]\d+)?", str(original))]
+    selected_numbers = [float(value.replace(",", ".")) for value in re.findall(r"\d+(?:[.,]\d+)?", str(selected))]
+    original_area = original_numbers[0] * original_numbers[-1] if len(original_numbers) >= 2 else None
+    selected_area = selected_numbers[0] * selected_numbers[-1] if len(selected_numbers) >= 2 else None
+    action = "reduzir" if original_area is not None and selected_area is not None and selected_area < original_area else "aumentar"
+    return f"{action} seção para {selected}"
 
 
 def _with_no_solution_message(result: dict | None, original: str, require_vpl_sigma: bool = False) -> dict:
@@ -1118,6 +1278,9 @@ def _with_no_solution_message(result: dict | None, original: str, require_vpl_si
     output["secao_sugerida"] = ""
     criteria = f"taxa CA <= {MAX_TAXA_CA} e taxa CP <= {MAX_TAXA_CP}"
     if require_vpl_sigma:
-        criteria += f", e sigma_inf_D >= lim_inf_F - {VPL_SIGMA_INF_TOLERANCE}"
+        criteria += (
+            f", e lim_inf_F - {VPL_SIGMA_INF_TOLERANCE} <= sigma_inf_D "
+            f"<= lim_inf_F + {VPL_SIGMA_INF_TOLERANCE}"
+        )
     output["mensagem"] = f"Nenhuma secao cadastrada passou com {criteria}."
     return output

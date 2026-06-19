@@ -4,7 +4,8 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from engine.structural_frame import run_frame_cases
-from engine.vr import optimize_vr_case, run_vr_case
+import engine.vr as vr_engine
+from engine.vr import _iter_section_candidates, optimize_vr_case, run_vr_case
 from ui.export import export_excel
 
 
@@ -45,6 +46,36 @@ def test_optimize_vr_case_suggests_valid_solution_for_closure_beam():
     assert result["MRU_MSD"] >= 1.05
     assert result["taxa_armadura_passiva"] <= 200
     assert result["secao"].startswith("R")
+
+
+def test_vr_optimizer_can_recommend_smaller_section(monkeypatch):
+    monkeypatch.setattr(vr_engine, "_iter_passive_layouts", lambda bw: [{}])
+    monkeypatch.setattr(
+        vr_engine,
+        "run_vr_case",
+        lambda params: {
+            "ok": True,
+            "status": "PASSA",
+            "secao": f"R{int(params['h'])}x{int(params['bw'])}",
+            "h": params["h"],
+            "bw": params["bw"],
+            "n_barras": 2,
+            "taxa_armadura_passiva": 100,
+            "MRU_MSD": 1.1,
+        },
+    )
+
+    result = vr_engine.optimize_vr_case({"h": 80, "bw": 25})
+
+    assert result["secao_sugerida"] == "R30x12"
+    assert result["mensagem"] == "reduzir seção para R30x12"
+
+
+def test_vr_section_candidates_include_smaller_geometries():
+    labels = [f"R{int(params['h'])}x{int(params['bw'])}" for params in _iter_section_candidates({"h": 80, "bw": 25})]
+
+    assert labels[0] == "R30x12"
+    assert "R80x25" in labels
 
 
 def test_run_frame_cases_accepts_vr_rows_and_exports_sheet():
