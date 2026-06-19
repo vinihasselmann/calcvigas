@@ -1,0 +1,12 @@
+* text=auto
+
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+
+*.xlsx binary
+*.xlsm binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+ENV/
+
+# Testes e cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+tmp_pytest/
+pytest-cache-files-*/
+
+# Streamlit e ambiente local
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+
+# Saidas geradas pelo aplicativo
+data/output/
+data/tmp/
+data/debug_inputs/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Anotacoes/prompts locais de implementacao
+cache_db_implementation_prompts.txt
+
+# Arquivos temporarios de planilhas e editores
+~$*.xlsx
+~$*.xlsm
+*.tmp
+*.bak
+
+# Sistema operacional / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Ferramentas locais de agentes
+.claude/
+.agents/
+.codex/

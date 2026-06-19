@@ -1,0 +1,8 @@
+[server]
+fileWatcherType = "none"
+folderWatchBlacklist = [
+  "data/output",
+  "data/tmp",
+  ".pytest_cache",
+  "__pycache__",
+]
