@@ -2,6 +2,11 @@
 
 Aplicativo Streamlit para calculo e verificacao de elementos estruturais pre-moldados.
 
+## Tutorial de uso
+
+O fluxo completo de modelagem no Revit, preparacao das tabelas, calculo, conferencia e
+retorno das taxas ao modelo esta em [TUTORIAL_APP_PRINCIPAL.md](TUTORIAL_APP_PRINCIPAL.md).
+
 ## Requisitos
 
 - Python 3.11 ou superior
