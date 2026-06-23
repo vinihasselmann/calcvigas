@@ -260,11 +260,21 @@ Campos principais do resultado:
 | `Vsd`, `VRd2` | Solicitação e resistência ao cisalhamento |
 | `taxa_armadura_passiva` | Taxa CA calculada, em kg/m³ |
 | `taxa_armadura_protendida` | Taxa CP calculada, em kg/m³ |
+| `Asw`, `Asw_calculada`, `Asw_minima` | Armadura transversal adotada, solicitada e mínima |
 | `status` | `PASSA`, `NAO PASSA` ou `ERRO` |
 | `erro_msg` | Motivo técnico de uma linha com erro |
 
 Uma `secao_sugerida` vazia normalmente significa que a seção original foi mantida ou que
 nenhuma alternativa cadastrada resolveu o caso; confirme pela `mensagem` e pelo `status`.
+
+Para VPT, o motor encontra primeiro a menor seção aprovada e também avalia uma seção da
+família imediatamente maior, limitada a 10 cm adicionais de altura e 25% de aumento de
+área. A seção maior é preferida quando permite reduzir o número de cordoalhas sem deixar de
+atender aos demais critérios.
+
+A ocupação das camadas VPT segue a sequência produtiva: C1 mantém no mínimo duas barras
+passivas; C2 somente é usada quando C1 está completa; C3 somente é usada quando C2 está
+completa. A camada central C2 pode ser completada com uma quantidade ímpar de cordoalhas.
 
 ### Passo 8 — Exportar
 

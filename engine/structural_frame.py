@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from itertools import product
 from pathlib import Path
 
@@ -832,21 +833,58 @@ def _vpt_params(row: dict) -> dict:
 def _optimize_vpt_case(base_params: dict) -> dict:
     original = str(base_params.get("secao") or "")
     fallback = None
-    for params, section_label in _iter_vpt_section_candidates(base_params):
-        best_section = None
-        bw = VPT_SECTION_CATALOG[section_label].bw if section_label in VPT_SECTION_CATALOG else params.get("bw", 40)
-        for layout in _iter_vpt_layouts(bw):
-            candidate = {**params, **layout, "secao": section_label}
-            result = run_vpt_case(candidate)
-            result["secao_testada"] = section_label
-            if fallback is None or _vpt_score(result) < _vpt_score(fallback):
-                fallback = _copy_psi_fields(result, candidate)
-            if _is_approved_vpt_solution(result):
-                copied = _copy_psi_fields(_mark_vpt_sigma_rule_as_accepted(result), candidate)
-                if best_section is None or _vpt_score(copied) < _vpt_score(best_section):
-                    best_section = copied
+    section_candidates = list(_iter_vpt_section_candidates(base_params))
+    by_label = {label: params for params, label in section_candidates}
+
+    def evaluate_section(params, section_label):
+        nonlocal fallback
+        bw = (
+            VPT_SECTION_CATALOG[section_label].bw
+            if section_label in VPT_SECTION_CATALOG
+            else params.get("bw", 40)
+        )
+        max_positions = sum(_limits_for_bw(bw).values())
+        for target_cords in range(2, max_positions + 1):
+            for target_bars in range(2, max_positions + 1):
+                best_at_count = None
+                for layout in _iter_vpt_layouts(
+                    bw,
+                    target_n_cords=target_cords,
+                    target_n_bars=target_bars,
+                ):
+                    candidate = {**params, **layout, "secao": section_label}
+                    result = run_vpt_case(candidate)
+                    result["secao_testada"] = section_label
+                    if fallback is None or _vpt_score(result) < _vpt_score(fallback):
+                        fallback = _copy_psi_fields(result, candidate)
+                    if _is_approved_vpt_solution(result):
+                        copied = _copy_psi_fields(_mark_vpt_sigma_rule_as_accepted(result), candidate)
+                        if best_at_count is None or _vpt_score(copied) < _vpt_score(best_at_count):
+                            best_at_count = copied
+                if best_at_count is not None:
+                    return best_at_count
+        return None
+
+    reference = None
+    for params, section_label in section_candidates:
+        best_section = evaluate_section(params, section_label)
         if best_section is not None:
-            return _with_section_recommendation(best_section, original, section_label)
+            reference = _with_section_recommendation(best_section, original, section_label)
+            break
+
+    if reference is not None:
+        selected = reference
+        for section_label in _vpt_economy_section_labels(reference):
+            params = by_label.get(section_label)
+            if params is None:
+                continue
+            best_section = evaluate_section(params, section_label)
+            if best_section is None:
+                continue
+            candidate = _with_section_recommendation(best_section, original, section_label)
+            if _prefer_vpt_economy_candidate(reference, selected, candidate):
+                selected = candidate
+        return selected
     return _with_no_solution_message(fallback, original)
 
 
@@ -864,34 +902,50 @@ def _iter_vpt_section_candidates(base_params: dict):
         yield params, spec.secao
 
 
-def _iter_vpt_layouts(bw: float):
-    limits = _limits_for_bw(bw)
-    seen = set()
-    max_c1_cords_with_min_passive = max(0, limits["c1"] - 2)
+def _iter_vpt_layouts(
+    bw: float,
+    target_n_cords: int | None = None,
+    target_n_bars: int | None = None,
+):
     diameter_options = tuple(reversed(VPT_PASSIVE_DIAM_OPTIONS))
-    for d_b1, d_b2, d_b3 in product(diameter_options, diameter_options, diameter_options):
-        for n_b1 in range(2, limits["c1"] + 1):
-            for n_c1 in range(0, limits["c1"] - n_b1 + 1):
-                if n_c1 % 2:
+
+    for n_c1, n_c2, n_c3, n_b1, n_b2, n_b3 in _vpt_count_patterns(int(round(float(bw)))):
+        if target_n_cords is not None and n_c1 + n_c2 + n_c3 != target_n_cords:
+            continue
+        if target_n_bars is not None and n_b1 + n_b2 + n_b3 != target_n_bars:
+            continue
+        active_bar_layers = [idx for idx, count in enumerate((n_b1, n_b2, n_b3)) if count > 0]
+        for active_diameters in product(diameter_options, repeat=len(active_bar_layers)):
+            diameters = [10.0, 10.0, 10.0]
+            for idx, diameter in zip(active_bar_layers, active_diameters):
+                diameters[idx] = diameter
+            yield _reinforcement_layout(
+                n_c1, n_c2, n_c3, n_b1, n_b2, n_b3, 12.7,
+                diameters[0], diameters[1], diameters[2],
+            )
+
+
+@lru_cache(maxsize=None)
+def _vpt_count_patterns(bw: int) -> tuple[tuple[int, int, int, int, int, int], ...]:
+    limits = _limits_for_bw(bw)
+    max_c1_cords_with_min_passive = max(0, limits["c1"] - 2)
+    count_patterns = set()
+    for n_b1 in range(2, limits["c1"] + 1):
+        for n_c1 in range(0, limits["c1"] - n_b1 + 1, 2):
+            count_patterns.add((n_c1, 0, 0, n_b1, 0, 0))
+            if n_b1 + n_c1 < limits["c1"]:
+                continue
+            for n_b2, n_c2 in _layer_count_pairs(limits["c2"], even_cords_only=False):
+                if n_c2 > 0 and (n_c1 == 0 or n_c1 < max_c1_cords_with_min_passive):
                     continue
-                base = _reinforcement_layout(n_c1, 0, 0, n_b1, 0, 0, 12.7, d_b1, d_b2, d_b3)
-                yield from _dedupe_layout(base, seen)
-                if n_b1 + n_c1 < limits["c1"]:
+                count_patterns.add((n_c1, n_c2, 0, n_b1, n_b2, 0))
+                if n_b2 + n_c2 < limits["c2"]:
                     continue
-                for n_b2, n_c2 in _layer_count_pairs(limits["c2"], even_cords_only=True):
-                    if n_c2 > 0 and n_c1 == 0:
+                for n_b3, n_c3 in _layer_count_pairs(limits["c3"], even_cords_only=True):
+                    if n_c3 > 0 and n_c2 == 0:
                         continue
-                    if n_c2 > 0 and n_c1 < max_c1_cords_with_min_passive:
-                        continue
-                    c2 = _reinforcement_layout(n_c1, n_c2, 0, n_b1, n_b2, 0, 12.7, d_b1, d_b2, d_b3)
-                    yield from _dedupe_layout(c2, seen)
-                    if n_b2 + n_c2 < limits["c2"]:
-                        continue
-                    for n_b3, n_c3 in _layer_count_pairs(limits["c3"], even_cords_only=True):
-                        if n_c3 > 0 and n_c2 == 0:
-                            continue
-                        c3 = _reinforcement_layout(n_c1, n_c2, n_c3, n_b1, n_b2, n_b3, 12.7, d_b1, d_b2, d_b3)
-                        yield from _dedupe_layout(c3, seen)
+                    count_patterns.add((n_c1, n_c2, n_c3, n_b1, n_b2, n_b3))
+    return tuple(sorted(count_patterns))
 
 
 def _is_approved_vpt_solution(result: dict) -> bool:
@@ -919,16 +973,14 @@ def _vpt_economy_section_labels(reference: dict) -> set[str]:
         spec
         for spec in VPT_SECTION_CATALOG.values()
         if spec.bw == ref_spec.bw
-        and spec.h1 > ref_spec.h1
+        and spec.hp > ref_spec.hp
         and spec.hp <= ref_spec.hp + VPT_ECONOMY_MAX_HP_INCREASE
         and spec.hp * spec.bw <= ref_area * VPT_ECONOMY_MAX_AREA_INCREASE
     ]
     if not candidates:
         return set()
-    max_h1 = max(spec.h1 for spec in candidates)
-    best_h1_family = [spec for spec in candidates if spec.h1 == max_h1]
-    target = min(best_h1_family, key=lambda spec: (spec.hp * spec.bw, spec.hp, spec.secao))
-    return {target.secao}
+    next_hp = min(spec.hp for spec in candidates)
+    return {spec.secao for spec in candidates if spec.hp == next_hp}
 
 
 def _prefer_vpt_economy_candidate(reference: dict, current: dict | None, candidate: dict) -> bool:
@@ -1010,14 +1062,15 @@ def _vpt_score(result: dict | None) -> tuple:
         return (1, float("inf"))
     n_cords = sum(_layout_count(result, f"n_cord_c{idx}") for idx in (1, 2, 3))
     n_bars = sum(_layout_count(result, f"n_barras_c{idx}") for idx in (1, 2, 3))
-    h = _coerce_value(result.get("h")) or float("inf")
+    concrete_area = _coerce_value(result.get("ac")) or float("inf")
     ratio = _coerce_value(result.get("MRU_MSD")) or 0
     return (
         0 if result.get("status") == "PASSA" else 1,
-        h,
-        _coerce_value(result.get("taxa_armadura_passiva")) or float("inf"),
+        n_cords,
+        n_bars,
         _coerce_value(result.get("taxa_armadura_protendida")) or float("inf"),
-        n_cords + n_bars,
+        _coerce_value(result.get("taxa_armadura_passiva")) or float("inf"),
+        concrete_area,
         _vpt_sigma_distance(result),
         max(0, MIN_MRU_MSD_RATIO - ratio),
         abs(ratio - MIN_MRU_MSD_RATIO),

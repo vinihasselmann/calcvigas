@@ -8,6 +8,7 @@ import engine.structural_frame as structural_frame
 from engine.structural_frame import (
     _build_laje_lookup,
     _is_vpt_economy_candidate,
+    _vpt_score,
     _is_approved_vpl_solution,
     _iter_vpl_layouts,
     _iter_vpl_section_candidates,
@@ -433,7 +434,24 @@ def test_section_candidate_lists_include_smaller_geometries():
 def test_vpt_economy_section_targets_next_taller_web_family():
     reference = {"secao_testada": "T55/25x40"}
 
-    assert _vpt_economy_section_labels(reference) == {"T65/45x40"}
+    assert _vpt_economy_section_labels(reference) == {"T60/35x40"}
+
+
+def test_vpt_layouts_fill_c1_then_allow_seven_cords_to_complete_c2():
+    layouts = list(_iter_vpt_layouts(30, target_n_cords=11, target_n_bars=2))
+
+    assert any(
+        layout["n_cord_c1"] == 4
+        and layout["n_cord_c2"] == 7
+        and layout["n_cord_c3"] == 0
+        and layout["n_barras_c1"] == 2
+        for layout in layouts
+    )
+    assert not any(
+        layout["n_cord_c3"] > 0
+        and layout["n_cord_c2"] + layout["n_barras_c2"] < 7
+        for layout in layouts
+    )
 
 
 def test_vpt_economy_candidate_accepts_large_prestress_reduction_with_limited_total_increase():
@@ -460,6 +478,35 @@ def test_vpt_economy_candidate_rejects_small_gain():
     }
 
     assert not _is_vpt_economy_candidate(reference, candidate)
+
+
+def test_vpt_score_prefers_fewer_strands_even_with_larger_concrete_section():
+    compact = {
+        "status": "PASSA",
+        "n_cord_c1": 4,
+        "n_cord_c2": 4,
+        "n_cord_c3": 4,
+        "n_barras_c1": 2,
+        "n_barras_c2": 3,
+        "n_barras_c3": 0,
+        "ac": 2950,
+        "taxa_armadura_passiva": 70,
+        "taxa_armadura_protendida": 34,
+        "MRU_MSD": 1.1,
+        "sigma_inf_F": -40,
+        "lim_inf_F": -42,
+    }
+    larger = {
+        **compact,
+        "n_cord_c1": 4,
+        "n_cord_c2": 4,
+        "n_cord_c3": 0,
+        "ac": 3400,
+        "taxa_armadura_passiva": 80,
+        "taxa_armadura_protendida": 24,
+    }
+
+    assert _vpt_score(larger) < _vpt_score(compact)
 
 
 def test_export_frame_results_splits_element_types_into_sheets():

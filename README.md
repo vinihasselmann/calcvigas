@@ -27,6 +27,11 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Executavel Windows
+
+As instrucoes para gerar e distribuir o `.exe` estao em
+[executavel/README.md](executavel/README.md).
+
 ## Testar
 
 ```powershell

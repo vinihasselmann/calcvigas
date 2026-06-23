@@ -76,6 +76,116 @@ def test_run_vpt_case_service_stress_matches_reference_sheet_method():
     assert result["ok_inf_F"] is False
 
 
+def test_vpt_v01_asw_and_passive_rate_match_reference_sheet():
+    result = run_vpt_case(
+        {
+            "secao": "T65/35x30",
+            "vao_viga": 8.15,
+            "lp_esq": "LP20",
+            "lp_dir": "LP20",
+            "vao_laje_esq": 10.07,
+            "vao_laje_dir": 10.07,
+            "acd_esq": 300,
+            "acd_dir": 300,
+            "rev_esq": 200,
+            "rev_dir": 200,
+            "n_cord_c1": 4,
+            "n_cord_c2": 4,
+            "n_cord_c3": 4,
+            "diam_cord_c1_mm": 12.7,
+            "diam_cord_c2_mm": 12.7,
+            "diam_cord_c3_mm": 12.7,
+            "n_barras_c1": 2,
+            "n_barras_c2": 3,
+            "n_barras_c3": 0,
+            "diam_barra_c1_mm": 10,
+            "diam_barra_c2_mm": 10,
+            "diam_barra_c3_mm": 32,
+        }
+    )
+
+    assert result["Asw_calculada"] == approx(3.53117427615714)
+    assert result["Asw_minima"] == approx(4.88595170987083)
+    assert result["Asw"] == approx(4.88595170987083)
+    assert result["taxa_armadura_passiva_longitudinal"] == approx(38.5788573148101)
+    assert result["taxa_armadura_passiva_transversal"] == approx(31.5269053713315)
+    assert result["taxa_armadura_passiva"] == approx(70.1057626861416)
+
+
+def test_vpt_v02_rejects_c3_cords_when_c2_is_not_full():
+    result = run_vpt_case(
+        {
+            "secao": "T60/35x30",
+            "vao_viga": 8.15,
+            "lp_esq": "LP20",
+            "lp_dir": "LP20",
+            "vao_laje_esq": 10.1,
+            "vao_laje_dir": 10.1,
+            "acd_esq": 150,
+            "acd_dir": 150,
+            "rev_esq": 200,
+            "rev_dir": 200,
+            "psi0": 0.5,
+            "psi1": 0.4,
+            "psi2": 0.3,
+            "n_cord_c1": 4,
+            "n_cord_c2": 4,
+            "n_cord_c3": 4,
+            "diam_cord_c1_mm": 12.7,
+            "diam_cord_c2_mm": 12.7,
+            "diam_cord_c3_mm": 12.7,
+            "n_barras_c1": 2,
+            "n_barras_c2": 0,
+            "n_barras_c3": 0,
+            "diam_barra_c1_mm": 10,
+            "diam_barra_c2_mm": 12.5,
+            "diam_barra_c3_mm": 32,
+        }
+    )
+
+    assert result["status"] == "ERRO"
+    assert "CAM. 3 so pode ser usada quando CAM. 2 estiver completa" in result["erro_msg"]
+
+
+def test_vpt_v02_economic_layout_completes_c2_with_seven_strands():
+    result = run_vpt_case(
+        {
+            "secao": "T65/35x30",
+            "vao_viga": 8.15,
+            "lp_esq": "LP20",
+            "lp_dir": "LP20",
+            "vao_laje_esq": 10.1,
+            "vao_laje_dir": 10.1,
+            "acd_esq": 150,
+            "acd_dir": 150,
+            "rev_esq": 200,
+            "rev_dir": 200,
+            "psi0": 0.5,
+            "psi1": 0.4,
+            "psi2": 0.3,
+            "n_cord_c1": 4,
+            "n_cord_c2": 7,
+            "n_cord_c3": 0,
+            "diam_cord_c1_mm": 12.7,
+            "diam_cord_c2_mm": 12.7,
+            "diam_cord_c3_mm": 12.7,
+            "n_barras_c1": 2,
+            "n_barras_c2": 0,
+            "n_barras_c3": 0,
+            "diam_barra_c1_mm": 10,
+            "diam_barra_c2_mm": 12.5,
+            "diam_barra_c3_mm": 32,
+        }
+    )
+
+    assert result["status"] == "PASSA"
+    assert result["n_cord"] == 11
+    assert result["n_barras"] == 2
+    assert result["MRU_MSD"] == approx(1.17547692466184)
+    assert result["taxa_armadura_passiva"] == approx(63.8358892122399)
+    assert result["taxa_armadura_protendida"] == approx(31.8101694915254)
+
+
 def test_run_vpt_case_accepts_v15_manual_satisfied_combination():
     result = run_vpt_case(
         {

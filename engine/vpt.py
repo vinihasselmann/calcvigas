@@ -18,6 +18,8 @@ from .vpt_model import (
     VptPrestressLayer,
     equivalent_prestress,
     passive_area_and_ys,
+    taxa_passiva_longitudinal,
+    taxa_passiva_transversal,
     taxa_passiva_total,
     taxa_protendida,
 )
@@ -76,6 +78,10 @@ VPT_RESULT_COLUMNS = [
     "VRd2",
     "As_passiva",
     "Asw",
+    "Asw_calculada",
+    "Asw_minima",
+    "taxa_armadura_passiva_longitudinal",
+    "taxa_armadura_passiva_transversal",
     "taxa_armadura_passiva",
     "taxa_armadura_protendida",
     "ok_flexao",
@@ -161,7 +167,6 @@ def _default_params() -> dict:
         "eng_esq": 0,
         "eng_dir": 0,
         "h_parede": 0,
-        "asw": 6.514602279827775,
         "fat_pi": 0.95,
         "perda_imediata": 0.05672037947670973,
         "perda_final": 0.21,
@@ -498,6 +503,20 @@ def _asw_min(params: dict, geom) -> float:
     return 0.2 * fctm(params["fck"]) / 500 * geom.bw * 100
 
 
+def _asw_required(params: dict, geom, concrete, composite, loads, yp: float) -> float:
+    """Calcula Asw solicitada conforme o bloco de cisalhamento da planilha VPT."""
+    fcti_kgf_cm2 = fcti(params["fck"]) * 10
+    vc0 = 0.6 * (
+        (fcti_kgf_cm2 / 1.3) * (concrete.ac - geom.bw * yp)
+        + (fcti_kgf_cm2 / 1.4) * ((geom.hs + geom.capa) * composite.bf_eq)
+    ) / 1000
+    vsw = max(0.0, loads.vsd - vc0)
+    effective_depth = geom.h - yp
+    if effective_depth <= 0:
+        raise ValueError("Altura util invalida para calcular Asw: h - yp deve ser maior que zero.")
+    return vsw * 100 / (0.9 * effective_depth * 5 / 1.15) if vsw > 0 else 0.0
+
+
 def _compressed_depth_from_area(acc: float, geom, concrete: VptConcreteSection, composite: VptCompositeSection) -> float:
     a_capa = composite._a_capa
     a_sup = composite._a_sup
@@ -722,7 +741,13 @@ def run_vpt_case(params: dict | None = None) -> dict:
         loads = _loads(merged, concrete, geom)
         flexure = _flexure(merged, geom, concrete, composite, loads, yp, asp, as_bottom, ys)
         vrd2 = _vrd2(merged, geom, composite, yp)
-        asw = max(merged.get("asw", 0), _asw_min(merged, geom))
+        asw_calculada = _asw_required(merged, geom, concrete, composite, loads, yp)
+        asw_minima = _asw_min(merged, geom)
+        asw = max(float(merged.get("asw", 0) or 0), asw_calculada, asw_minima)
+        taxa_longitudinal = taxa_passiva_longitudinal(
+            as_bottom, as_top, geom.h, concrete.ac
+        )
+        taxa_transversal = taxa_passiva_transversal(asw, geom, concrete.ac)
         taxa_passiva = taxa_passiva_total(as_bottom, as_top, asw, geom, concrete.ac)
         taxa_cp = taxa_protendida(asp, concrete.ac, superior_area=asp_top)
         ok_cisalhamento = vrd2 >= loads.vsd
@@ -793,6 +818,10 @@ def run_vpt_case(params: dict | None = None) -> dict:
             "Vsd": loads.vsd,
             "VRd2": vrd2,
             "Asw": asw,
+            "Asw_calculada": asw_calculada,
+            "Asw_minima": asw_minima,
+            "taxa_armadura_passiva_longitudinal": taxa_longitudinal,
+            "taxa_armadura_passiva_transversal": taxa_transversal,
             "taxa_armadura_passiva": taxa_passiva,
             "taxa_armadura_protendida": taxa_cp,
             "ok_cisalhamento": ok_cisalhamento,

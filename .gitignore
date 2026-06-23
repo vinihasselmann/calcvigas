@@ -11,9 +11,16 @@ ENV/
 # Testes e cobertura
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 tmp_pytest/
 pytest-cache-files-*/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
 
 # Streamlit e ambiente local
 .streamlit/secrets.toml
@@ -29,6 +36,11 @@ data/debug_inputs/
 *.sqlite
 *.sqlite3
 *.log
+
+# Artefatos de compilacao e distribuicao (PyInstaller)
+build/
+dist/
+*.spec.bak
 
 # Anotacoes/prompts locais de implementacao
 cache_db_implementation_prompts.txt

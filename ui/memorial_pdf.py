@@ -132,6 +132,11 @@ def _reinforcement_items(row: pd.Series) -> list[tuple[str, object]]:
         ("Barras C3", _layer_text(row, "n_barras_c3", "diam_barra_c3_mm", _bar_area_map(row))),
         ("Barras sup.", _layer_text(row, "n_barras_sup", "diam_barra_sup_mm", PASSIVE_BAR_AREA)),
         ("As passiva (cm2)", row.get("As_passiva")),
+        ("Asw adotada (cm2/m)", row.get("Asw")),
+        ("Asw calculada (cm2/m)", row.get("Asw_calculada")),
+        ("Asw minima (cm2/m)", row.get("Asw_minima")),
+        ("Taxa CA longitudinal", row.get("taxa_armadura_passiva_longitudinal")),
+        ("Taxa CA transversal", row.get("taxa_armadura_passiva_transversal")),
         ("Taxa passiva", row.get("taxa_armadura_passiva")),
         ("Taxa protendida", row.get("taxa_armadura_protendida")),
     ]
