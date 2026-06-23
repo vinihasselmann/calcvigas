@@ -17,6 +17,7 @@ from engine.lajes_alv import (
 )
 from engine.lajes_alv_model import LAJE_ALV_SPECS
 from ui.export import export_excel, export_excel_to_path
+from ui.memorial_pdf import export_memorial_pdf
 from ui.theme import apply_brand_theme
 
 
@@ -25,6 +26,7 @@ apply_brand_theme()
 
 DISPLAY_MAX_ROWS = 5000
 DOWNLOAD_MAX_ROWS = 100000
+MEMORIAL_MAX_ROWS = 500
 LAJE_TYPES = list(LAJE_ALV_SPECS)
 CAPA_OPTIONS = [5, 7, 10]
 FCK_CAPA_OPTIONS = [30, 35, 40, 45, 50]
@@ -240,6 +242,19 @@ def _render_results(df: pd.DataFrame):
                     "O XLSX nao foi finalizado. Nenhum arquivo final foi publicado; "
                     f"tente reduzir os filtros ou rode novamente. Detalhe: {exc}"
                 )
+
+    if len(filtered) <= MEMORIAL_MAX_ROWS:
+        st.download_button(
+            "Baixar memorial de lajes PDF",
+            data=export_memorial_pdf(filtered),
+            file_name="memorial_lajes_alveolares.pdf",
+            mime="application/pdf",
+        )
+    else:
+        st.info(
+            f"Para gerar o memorial PDF, reduza o resultado filtrado para ate "
+            f"{MEMORIAL_MAX_ROWS} lajes."
+        )
 
 
 st.title("Lajes ALV - Estudo Parametrico de Lajes Alveolares")

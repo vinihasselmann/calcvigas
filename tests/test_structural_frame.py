@@ -53,6 +53,18 @@ def test_normalize_frame_table_accepts_revit_like_headers():
     assert normalized.iloc[0]["acd"] == "300 kgf/m2"
 
 
+def test_lp20_with_10_07m_passes_without_continuity():
+    result = structural_frame._run_typed_case(
+        "LAJE", {"lp_type": "LP20", "vao": 10.07, "acd": 500}
+    )
+
+    assert result["vao"] == pytest.approx(10.07)
+    assert result["status"] == "PASSA"
+    assert result["analise"] == "sem continuidade"
+    assert result["continuidade_kgf"] == 0
+    assert result["momento_fletor"] == pytest.approx(11851.6984375)
+
+
 def test_run_frame_cases_calculates_vpl_vpt_and_laje_together():
     df = sample_frame_table()
 

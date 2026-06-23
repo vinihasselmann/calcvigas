@@ -114,7 +114,7 @@ def test_run_laje_case_continuity_uses_np_demands_for_cables():
     assert continuity["cabos"] == "8 x 12,7mm"
 
 
-def test_lp15_fails_without_continuity_and_passes_with_continuity_like_plan1():
+def test_continuity_does_not_approve_laje_beyond_catalog_span():
     base = {
         "lp_type": "LP15",
         "sobrecarga": 150,
@@ -133,10 +133,25 @@ def test_lp15_fails_without_continuity_and_passes_with_continuity_like_plan1():
     assert simple["status"] == "NAO PASSA"
     assert continuity["momento_fletor"] == continuity["ms_pos_max_continuidade"]
     assert continuity["forca_cortante"] == continuity["vs_max_continuidade"]
-    assert continuity["momento_fletor"] == 6321.674311926605
-    assert continuity["forca_cortante"] == 2825
-    assert continuity["cabos"] == "9 x 9,5mm"
-    assert continuity["status"] == "PASSA"
+    assert continuity["cabos"] == "NAO PASSA"
+    assert continuity["status"] == "NAO PASSA"
+
+
+def test_auto_adjust_suggests_next_lp_when_span_exceeds_catalog():
+    result = run_laje_case(
+        {
+            "lp_type": "LP15",
+            "sobrecarga": 150,
+            "vao": 10,
+            "capa": 5,
+            "fck_capa": 40,
+            "auto_ajuste": True,
+        }
+    )
+
+    assert result["status"] == "NAO PASSA"
+    assert result["lp_sugerida"] == "LP20"
+    assert "excede o limite" in result["mensagem"]
 
 
 def test_lp265_auto_adjust_uses_filling_when_shear_fails():

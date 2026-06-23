@@ -78,6 +78,31 @@ def test_vr_section_candidates_include_smaller_geometries():
     assert "R80x25" in labels
 
 
+def test_vr_optimizer_preserves_original_section_when_all_candidates_fail(monkeypatch):
+    monkeypatch.setattr(vr_engine, "_iter_passive_layouts", lambda bw: [{}])
+    monkeypatch.setattr(
+        vr_engine,
+        "run_vr_case",
+        lambda params: {
+            "ok": False,
+            "status": "NAO PASSA",
+            "secao": f"R{int(params['h'])}x{int(params['bw'])}",
+            "h": params["h"],
+            "bw": params["bw"],
+            "n_barras": 2,
+            "taxa_armadura_passiva": 100,
+            "MRU_MSD": 0.8,
+        },
+    )
+
+    result = vr_engine.optimize_vr_case({"h": 82, "bw": 40})
+
+    assert result["secao"] == "R82x40"
+    assert result["secao_original"] == "R82x40"
+    assert result["secao_sugerida"] == ""
+    assert result["status"] == "NAO PASSA"
+
+
 def test_run_frame_cases_accepts_vr_rows_and_exports_sheet():
     df = pd.DataFrame(
         [
@@ -105,3 +130,28 @@ def test_run_frame_cases_accepts_vr_rows_and_exports_sheet():
     headers = [cell.value for cell in next(workbook["VR"].iter_rows(min_row=1, max_row=1))]
     assert "carga_fechamento_kgf_m" in headers
     assert "taxa_armadura_passiva" in headers
+
+
+def test_frame_vr_keeps_imported_section_when_no_alternative_passes():
+    results = run_frame_cases(
+        pd.DataFrame(
+            [
+                {
+                    "ID_ELEMENTO": "V17",
+                    "TIPO_ELEMENTO": "VR",
+                    "NOME_TIPO": "R",
+                    "PECA-Altura Pre": 82,
+                    "PECA-Largura Pre": 40,
+                    "VAO_VIGA_CM": 1245,
+                }
+            ]
+        )
+    )
+
+    row = results.iloc[0]
+    assert row["id_elemento"] == "V17"
+    assert row["secao"] == "R82x40"
+    assert row["secao_original"] == "R82x40"
+    assert row["secao_sugerida"] == ""
+    assert row["h"] == 82
+    assert row["bw"] == 40

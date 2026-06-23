@@ -320,18 +320,29 @@ def run_vr_case(params: dict | None = None) -> dict:
 def optimize_vr_case(base_params: dict) -> dict:
     original = _section_label(base_params)
     fallback = None
+    original_fallback = None
     for section_params in _iter_section_candidates(base_params):
+        section_label = _section_label(section_params)
         best = None
         for layout in _iter_passive_layouts(section_params["bw"]):
             result = run_vr_case({**section_params, **layout})
             if fallback is None or _candidate_score(result) < _candidate_score(fallback):
                 fallback = result
+            if section_label == original and (
+                original_fallback is None
+                or _candidate_score(result) < _candidate_score(original_fallback)
+            ):
+                original_fallback = result
             if result.get("ok"):
                 if best is None or _candidate_score(result) < _candidate_score(best):
                     best = result
         if best is not None:
             return _with_recommendation(best, original)
-    return _with_recommendation(fallback or run_vr_case(base_params), original)
+    # Uma alternativa reprovada nao e uma recomendacao. Quando nenhuma
+    # candidata passa, preserva a geometria importada no resultado/memorial.
+    return _with_recommendation(
+        original_fallback or fallback or run_vr_case(base_params), original
+    )
 
 
 def _section_label(params: dict) -> str:

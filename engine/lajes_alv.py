@@ -153,7 +153,7 @@ def run_laje_case(params: dict) -> dict:
         if continuity is not None and inputs.continuidade_kgf > 0:
             momento = continuity.ms_pos_max
             cortante = continuity.vs_max
-            cabos = select_cables_by_demands(spec, inputs.vao, momento, cortante, check_span=False)
+            cabos = select_cables_by_demands(spec, inputs.vao, momento, cortante, check_span=True)
             status = "PASSA" if cabos != "NAO PASSA" else "NAO PASSA"
 
         result = {
@@ -217,6 +217,16 @@ def _auto_adjust_failed_laje(
     spec,
     inputs: LajeAlvInputs,
 ) -> dict:
+    # Continuidade e preenchimento nao podem validar uma laje fora do vao
+    # limite do catalogo. Nesse caso, a unica correcao segura e aumentar a LP.
+    if inputs.vao > spec.vao_max:
+        output = _with_lp_suggestion(initial, spec.lp_type)
+        output["mensagem"] = (
+            f"Vao de {inputs.vao:g} m excede o limite de {spec.vao_max:g} m "
+            f"da {spec.lp_type}. " + (output.get("mensagem") or "")
+        ).strip()
+        return output
+
     if spec.lp_type != "LP26,5":
         return _with_lp_suggestion(initial, spec.lp_type)
 
@@ -234,7 +244,7 @@ def _auto_adjust_failed_laje(
             adjusted_inputs.vao,
             continuity.ms_pos_max,
             continuity.vs_max,
-            check_span=False,
+            check_span=True,
         )
         result = _with_continuity_result(initial, adjusted_inputs, continuity, cabos)
         if result["status"] == "PASSA":

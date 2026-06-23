@@ -45,6 +45,20 @@ def test_carga_capa_matches_plan1_formula():
     assert carga_capa(7) == 200
 
 
+def test_lp15_checks_span_and_both_capacity_limits():
+    spec = LAJE_ALV_SPECS["LP15"]
+
+    beyond_catalog = run_simple_model(
+        spec, LajeAlvInputs(sobrecarga=0, vao=9.6, capa=5, fck_capa=40)
+    )
+    excessive_shear = run_simple_model(
+        spec, LajeAlvInputs(sobrecarga=12000, vao=1, capa=5, fck_capa=40)
+    )
+
+    assert beyond_catalog.status == "NAO PASSA"
+    assert excessive_shear.status == "NAO PASSA"
+
+
 def test_shear_filling_model_matches_lp265_spreadsheet_values():
     inputs = LajeAlvInputs(sobrecarga=3000, vao=5.8, capa=10, fck_capa=40)
     result = run_shear_filling_model(

@@ -270,20 +270,13 @@ def select_simple_cables(spec: LajeAlvSpec, inputs: LajeAlvInputs) -> str:
     moment = momento_fletor(spec, inputs)
     shear = forca_cortante(spec, inputs)
 
-    if spec.lp15_selector:
-        low = options["7 x 9,5mm"]
-        high = options["9 x 9,5mm"]
-        if moment < low.momento_max:
-            return low.cabos if shear < low.cortante_max else high.cabos
-        return NAO_PASSA if moment > high.momento_max else high.cabos
-
     for cable_name in spec.selector:
         if _option_passes_demand(
             options[cable_name],
             spec,
             inputs.vao,
-            momento_fletor(spec, inputs),
-            forca_cortante(spec, inputs),
+            moment,
+            shear,
         ):
             return cable_name
     return NAO_PASSA
